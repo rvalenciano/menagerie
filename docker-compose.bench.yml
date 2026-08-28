@@ -1,0 +1,27 @@
+# Load-testing overlay. Run alongside docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.bench.yml \
+#     up --build --abort-on-container-exit vegeta-load-balancer
+#   docker compose -f docker-compose.yml -f docker-compose.bench.yml \
+#     up --build --abort-on-container-exit vegeta-rate-limiter
+#
+# Both build the same tiny pure-Go vegeta image (from each project's own
+# benchmark/ folder) and fire sustained load at the real, already-running
+# service over the shared `labnet` network.
+services:
+  vegeta-load-balancer:
+    build:
+      context: ./go-load-balancer/benchmark
+    depends_on:
+      - load-balancer
+    command: ["${RATE:-200}", "${DURATION:-30s}", "http://load-balancer:8080/"]
+    networks:
+      - labnet
+
+  vegeta-rate-limiter:
+    build:
+      context: ./rate-limiter/benchmark
+    depends_on:
+      - rate-limiter
+    command: ["${RATE:-200}", "${DURATION:-30s}", "http://rate-limiter:3000/"]
+    networks:
+      - labnet

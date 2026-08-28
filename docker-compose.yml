@@ -1,0 +1,164 @@
+networks:
+  labnet:
+
+volumes:
+  pgdata:
+
+services:
+  # ---------------------------------------------------------------
+  # Shared infrastructure
+  # ---------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: systems_lab
+      POSTGRES_USER: systems_lab
+      POSTGRES_PASSWORD: systems_lab
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - labnet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U systems_lab -d systems_lab"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # exhibits — one shared image, three health profiles, reused by
+  # load-balancer and circuit-breaker below. See exhibits/README.md.
+  backend-healthy:
+    build:
+      context: ./exhibits
+    environment:
+      NAME: backend-healthy
+      PORT: "8080"
+      UNHEALTHY_SECONDS: "0"
+    networks:
+      - labnet
+
+  backend-flaky:
+    build:
+      context: ./exhibits
+    environment:
+      NAME: backend-flaky
+      PORT: "8080"
+      CYCLE_PERIOD_SECONDS: "10"
+      UNHEALTHY_SECONDS: "6"
+    networks:
+      - labnet
+
+  backend-down:
+    build:
+      context: ./exhibits
+    environment:
+      NAME: backend-down
+      PORT: "8080"
+      CYCLE_PERIOD_SECONDS: "10"
+      UNHEALTHY_SECONDS: "10"
+    networks:
+      - labnet
+
+  # ---------------------------------------------------------------
+  # load-balancer — routes to the shared backend fleet. Round-robin
+  # across all three; its active+passive health checks should skip
+  # backend-down entirely and react live to backend-flaky's cycle.
+  # ---------------------------------------------------------------
+  load-balancer:
+    build:
+      context: ./go-load-balancer
+      dockerfile: Dockerfile.lb
+    environment:
+      LISTEN_ADDR: ":8080"
+      BACKENDS: "http://backend-healthy:8080,http://backend-flaky:8080,http://backend-down:8080"
+      HEALTH_CHECK_PATH: "/health"
+      HEALTH_CHECK_INTERVAL: "5s"
+    ports:
+      - "8090:8080"
+    depends_on:
+      - backend-healthy
+      - backend-flaky
+      - backend-down
+    networks:
+      - labnet
+
+  # ---------------------------------------------------------------
+  # circuit-breaker — one breaker per shared upstream, plus a Postgres
+  # audit log of every state transition (breaker_transitions table).
+  # One-shot: makes its configured number of calls, then exits. Run
+  # with `docker compose run --build circuit-breaker-demo`.
+  # ---------------------------------------------------------------
+  circuit-breaker-demo:
+    build:
+      context: ./circuit-breaker
+      dockerfile: Dockerfile.demo
+    environment:
+      UPSTREAMS: "healthy=http://backend-healthy:8080,flaky=http://backend-flaky:8080,down=http://backend-down:8080"
+      DATABASE_URL: "postgres://systems_lab:systems_lab@postgres:5432/systems_lab?sslmode=disable"
+    depends_on:
+      backend-healthy:
+        condition: service_started
+      backend-flaky:
+        condition: service_started
+      backend-down:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    networks:
+      - labnet
+
+  # ---------------------------------------------------------------
+  # consistent-hash-ring — node membership persisted to Postgres
+  # (ring_nodes table); the ring's hash math stays in-memory, rebuilt
+  # from the persisted active nodes on startup. One-shot CLI demo. Run
+  # with `docker compose run --build consistent-hash-ring-demo`.
+  # ---------------------------------------------------------------
+  consistent-hash-ring-demo:
+    build:
+      context: ./consistent-hash-ring
+    environment:
+      DATABASE_URL: "postgres://systems_lab:systems_lab@postgres:5432/systems_lab?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - labnet
+
+  # ---------------------------------------------------------------
+  # job-queue — jobs persisted to Postgres (jobs table); dequeue uses
+  # `SELECT ... FOR UPDATE SKIP LOCKED` for safe multi-worker pickup.
+  # One-shot demo. Run with `docker compose run --build job-queue-demo`.
+  # ---------------------------------------------------------------
+  job-queue-demo:
+    build:
+      context: ./job-queue
+    environment:
+      DATABASE_URL: "postgres://systems_lab:systems_lab@postgres:5432/systems_lab?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - labnet
+
+  # ---------------------------------------------------------------
+  # rate-limiter and ttl-cache stay in-memory only — a rate limiter or
+  # cache backed synchronously by the same database it protects would
+  # defeat its own purpose. No Postgres wiring here by design.
+  # ---------------------------------------------------------------
+  rate-limiter:
+    build:
+      context: ./rate-limiter
+    ports:
+      - "3000:3000"
+    networks:
+      - labnet
+
+  ttl-cache:
+    build:
+      context: ./ttl-cache
+    ports:
+      - "6380:6380"
+    networks:
+      - labnet

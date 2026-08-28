@@ -1,0 +1,8 @@
+go 1.26
+
+use (
+	./go-load-balancer
+	./circuit-breaker
+	./consistent-hash-ring
+	./exhibits
+)

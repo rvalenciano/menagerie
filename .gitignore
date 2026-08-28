@@ -1,0 +1,30 @@
+# --- Go (load-balancer, circuit-breaker, consistent-hash-ring, exhibits) ---
+/bin/
+*.test
+*.out
+
+# --- Rust (rate-limiter) ---
+/rate-limiter/target/
+*.rs.bk
+
+# --- C (ttl-cache) ---
+ttl-cache/src/*.o
+ttl-cache/server
+ttl-cache/test_cache
+
+# --- Python (job-queue) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "job-queue"
+version = "0.1.0"
+description = "Postgres-backed worker pool / job queue with retry backoff, built test-first."
+requires-python = ">=3.12"
+dependencies = ["psycopg[binary]>=3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

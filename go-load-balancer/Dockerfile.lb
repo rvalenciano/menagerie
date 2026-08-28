@@ -1,0 +1,12 @@
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 go build -o /out/loadbalancer ./cmd/loadbalancer
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates wget
+COPY --from=build /out/loadbalancer /usr/local/bin/loadbalancer
+EXPOSE 8080
+ENTRYPOINT ["loadbalancer"]
