@@ -59,19 +59,55 @@ writing the first test").
 
 ## Running it
 
+Bring up everything at once:
+
 ```bash
-# Core long-running stack: postgres + the exhibits fleet + load-balancer
-# + the standalone rate-limiter and ttl-cache servers
 docker compose up --build postgres backend-healthy backend-flaky backend-down \
   load-balancer rate-limiter ttl-cache
-
-# One-shot demos (make N calls / operations, then exit)
 docker compose run --build circuit-breaker-demo
 docker compose run --build consistent-hash-ring-demo
 docker compose run --build job-queue-demo
+```
 
-# Build/vet every Go module at once from the workspace root — note
-# plain `./...` doesn't work from the workspace root itself; list each
+Or bring up any one project on its own — `docker compose up --build <service>`
+pulls in whatever it `depends_on` automatically (e.g. `load-balancer`
+starts the `exhibits` fleet for you; the three `*-demo` services start
+`postgres`). Every stub currently returns/raises/logs its language's
+"not implemented" error — that's expected until you implement it.
+
+| Project | Run | Talk to it / watch it | What it's exercising |
+|---|---|---|---|
+| `go-load-balancer` | `docker compose up --build load-balancer` | `curl http://localhost:8090/` a few times | round-robins over the `exhibits` fleet (healthy/flaky/down); once implemented, should skip `backend-down` and react live to `backend-flaky` |
+| `circuit-breaker` | `docker compose run --build circuit-breaker-demo` | one-shot — read its log output | one breaker per `exhibits` upstream; once implemented, each transition also gets written to `breaker_transitions` in Postgres |
+| `consistent-hash-ring` | `docker compose run --build consistent-hash-ring-demo` | one-shot — read its log output | node membership persisted to `ring_nodes`; the ring's hash math stays in-memory, rebuilt from the persisted active nodes |
+| `rate-limiter` | `docker compose up --build rate-limiter` | `curl http://localhost:3000/` repeatedly, or bench it (below) | in-memory token bucket, no external dependencies |
+| `ttl-cache` | `docker compose up --build ttl-cache` | `printf 'SET k v 5000\r\nGET k\r\n' \| nc localhost 6380` | in-memory LRU + TTL cache over a line protocol, no external dependencies |
+| `job-queue` | `docker compose run --build job-queue-demo` | one-shot — read its log output | jobs persisted to `jobs`; dequeue via `SELECT ... FOR UPDATE SKIP LOCKED` |
+| `exhibits` | started automatically as a dependency (`backend-healthy`/`-flaky`/`-down`), not run standalone | `curl http://localhost:8090/` through the load balancer, or exec into another container to hit it directly | not a TDD exercise itself — pure shared infrastructure |
+
+**Ports:** `postgres` 5432 · `load-balancer` 8090→8080 · `rate-limiter`
+3000 · `ttl-cache` 6380. The `*-demo` services and the `exhibits`
+instances aren't published to the host — they're only reachable from
+other containers on the `labnet` network.
+
+### Benchmarking
+
+```bash
+# rate=200 req/s, duration=30s by default
+docker compose -f docker-compose.yml -f docker-compose.bench.yml \
+  up --build --abort-on-container-exit vegeta-load-balancer
+docker compose -f docker-compose.yml -f docker-compose.bench.yml \
+  up --build --abort-on-container-exit vegeta-rate-limiter
+
+# override rate/duration
+RATE=1000 DURATION=1m docker compose -f docker-compose.yml -f docker-compose.bench.yml \
+  up --build --abort-on-container-exit vegeta-load-balancer
+```
+
+### Go workspace
+
+```bash
+# plain `./...` doesn't work from the workspace root itself — list each
 # module explicitly:
 go build ./go-load-balancer/... ./circuit-breaker/... ./consistent-hash-ring/... ./exhibits/...
 ```

@@ -53,6 +53,11 @@ A circuit breaker is a small, genuinely interesting exercise because:
   from "is it wired correctly around a real, unreliable dependency"
   (I/O, exercised optionally with `httptest`).
 
+Note: the breaker's *current* state is still always in-memory only —
+that was never meant to be persisted. What's new is a separate
+*transition history* (an audit log of state changes over time),
+written to Postgres as a side effect; see `internal/translog` below.
+
 ## 2. Architecture
 
 ```
@@ -74,9 +79,17 @@ A circuit breaker is a small, genuinely interesting exercise because:
 ```
 
 - **`internal/breaker`** — `State` (Closed/Open/HalfOpen), `Config`
-  (`FailureThreshold`, `OpenTimeout`, injected `Clock`), and `Breaker`
-  with its `Execute` seam. No network I/O — this package is the entire
-  TDD-able core.
+  (`FailureThreshold`, `OpenTimeout`, injected `Clock`, and an optional
+  `OnTransition(from, to State)` hook), and `Breaker` with its
+  `Execute` seam. No network I/O — this package is the entire TDD-able
+  core. `OnTransition` is how a separate concern (the audit log below)
+  observes state changes without this package needing to know
+  anything about Postgres.
+- **`internal/translog`** — `Logger`, a thin wrapper around a `*pgx.Conn`
+  with one method, `LogTransition`, that writes a row to the
+  `breaker_transitions` table whenever a breaker's state changes. This
+  is the persistence side-effect; it never touches the breaker's
+  decision-making.
 - **`cmd/upstream`** — a small, real HTTP server with a configurable
   failure profile (`CALLS_PER_CYCLE` / `FLAKY_WINDOW` env vars): a
   window of failing (500) requests followed by a window of succeeding
@@ -91,7 +104,10 @@ A circuit breaker is a small, genuinely interesting exercise because:
   (`upstream=<name> call=<n> state=<state> result=...`) — so a single
   run shows one breaker staying closed the whole time, one cycling
   through open/half-open/closed as its upstream recovers, and one
-  tripping open and staying there.
+  tripping open and staying there. It also connects to Postgres via
+  `DATABASE_URL` and wires each breaker's `Config.OnTransition` to a
+  `translog.Logger`, so transitions get written to the audit log once
+  that seam is implemented too.
 
 ## 3. TDD plan — proposed seams (to confirm before writing the first test)
 
@@ -120,6 +136,17 @@ seams. Proposed for this project:
    success and failure. Useful for confirming the breaker composes
    cleanly with real HTTP code, but not required to validate the state
    machine itself (seams 1 and 2 already cover that in full).
+
+4. **(proposed — to confirm before writing the first test)**
+   `translog.Logger.LogTransition` — the audit-log seam. Given a
+   sequence of transitions, asserts one row per transition lands in
+   the `breaker_transitions` table, testable against a real Postgres
+   (the docker-compose `postgres` service, or one run locally). This
+   is a separate concern from seams 1 and 2: the breaker's
+   decision-making stays pure and in-memory regardless of whether this
+   seam is implemented; this seam only covers persisting the fact that
+   a transition happened, as a side effect observed through
+   `Config.OnTransition`.
 
 Implementation status right now: **shell only**. Types and function
 signatures exist; `Execute`'s body returns "not implemented" so the
