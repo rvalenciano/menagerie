@@ -103,6 +103,20 @@ func (b *Breaker) State() State {
 // TODO(TDD): implement test-first against
 // internal/breaker/breaker_test.go (seams 1 and 2 in README.md §3). This
 // is the shell's first red test.
+//
+// Expected shape: if b.state is Open, check whether
+// b.cfg.Clock().Sub(<time the breaker opened>) >= b.cfg.OpenTimeout —
+// if not, return ErrCircuitOpen without calling fn; if so, move to
+// HalfOpen and fall through to a trial call. Otherwise (Closed or
+// HalfOpen) call fn(). On a nil error: reset any failure count, and if
+// state was HalfOpen move to Closed. On a non-nil error: if state is
+// HalfOpen, move straight back to Open (and record the new open time);
+// if state is Closed, increment the consecutive-failure count and move
+// to Open (recording the open time) once it reaches
+// b.cfg.FailureThreshold. Whenever state actually changes, call
+// b.cfg.OnTransition(old, new) if non-nil (see Config.OnTransition).
+// You'll need a field to remember when the breaker opened, and a
+// mutex — Execute must be safe for concurrent callers.
 func (b *Breaker) Execute(fn func() error) error {
 	return errors.New("not implemented")
 }

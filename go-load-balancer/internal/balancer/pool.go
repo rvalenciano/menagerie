@@ -65,6 +65,13 @@ func (p *Pool) Backends() []*Backend {
 //
 // TODO(TDD): implement test-first against internal/balancer/pool_test.go
 // (seam 1 in README.md §3). This is the shell's first red test.
+//
+// Expected shape: atomically advance p.next (p.next.Add(1)), reduce it
+// mod len(p.backends) to get a starting index, then walk forward from
+// there checking IsAlive() — skip dead backends, return the first
+// alive one you find. Walk at most len(p.backends) steps (one full
+// lap) before giving up and returning ErrNoHealthyBackends, so an
+// all-dead pool can't loop forever.
 func (p *Pool) Next() (*Backend, error) {
 	return nil, errors.New("not implemented")
 }

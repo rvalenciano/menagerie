@@ -3,10 +3,14 @@
 #     up --build --abort-on-container-exit vegeta-load-balancer
 #   docker compose -f docker-compose.yml -f docker-compose.bench.yml \
 #     up --build --abort-on-container-exit vegeta-rate-limiter
+#   docker compose -f docker-compose.yml -f docker-compose.bench.yml \
+#     up --build --abort-on-container-exit bench-ttl-cache
 #
-# Both build the same tiny pure-Go vegeta image (from each project's own
-# benchmark/ folder) and fire sustained load at the real, already-running
-# service over the shared `labnet` network.
+# All three are pure-Go load-testing tools (from each project's own
+# benchmark/bench folder) firing sustained load at the real,
+# already-running service over the shared `labnet` network. The first
+# two speak HTTP via vegeta; ttl-cache speaks its own line-based TCP
+# protocol, so it gets a small hand-rolled Go client instead.
 services:
   vegeta-load-balancer:
     build:
@@ -23,5 +27,15 @@ services:
     depends_on:
       - rate-limiter
     command: ["${RATE:-200}", "${DURATION:-30s}", "http://rate-limiter:3000/"]
+    networks:
+      - labnet
+
+  bench-ttl-cache:
+    build:
+      context: ./ttl-cache
+      dockerfile: Dockerfile.bench
+    depends_on:
+      - ttl-cache
+    command: ["-host", "ttl-cache", "-port", "6380", "-clients", "${CLIENTS:-20}", "-duration", "${DURATION:-5s}"]
     networks:
       - labnet

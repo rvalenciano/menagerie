@@ -120,6 +120,14 @@ func (r *Ring) RemoveNode(ctx context.Context, name string) error {
 //
 // TODO(TDD): implement test-first against internal/ring/ring_test.go
 // (seam 1 in README.md §3). This is the shell's first red test.
+//
+// Expected shape: return ErrNoNodes if len(r.sortedHashes) == 0.
+// Otherwise hash(key) with the same hash function used to place
+// virtual nodes in AddNode, then binary-search r.sortedHashes (it's
+// kept sorted) for the first entry >= that hash — sort.Search is the
+// standard-library tool for this. If every entry is smaller (the hash
+// falls past the end), wrap around to index 0 — that's the "ring" part.
+// Look up r.hashToNode[found hash] and return it.
 func (r *Ring) Get(key string) (string, error) {
 	return "", errors.New("not implemented")
 }

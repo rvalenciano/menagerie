@@ -1,11 +1,11 @@
-FROM gcc:13-bookworm AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
-COPY Makefile ./
-COPY include ./include
-COPY src ./src
-RUN make build
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 go build -o /out/server ./cmd/server
 
-FROM debian:bookworm-slim
-COPY --from=build /src/server /usr/local/bin/server
+FROM alpine:3.20
+COPY --from=build /out/server /usr/local/bin/server
 EXPOSE 6380
 ENTRYPOINT ["server"]

@@ -36,5 +36,14 @@ func NewChecker(pool *balancer.Pool, path string, interval time.Duration) *Check
 //
 // TODO(TDD): implement test-first against
 // internal/healthcheck/checker_test.go (seam 3 in README.md §3).
+//
+// Expected shape: a time.Ticker at c.Interval; on each tick (and
+// probably once immediately, before the first tick), loop over
+// c.Pool.Backends() and GET backend.URL joined with c.Path using
+// c.Client — a 200 response means SetAlive(true), anything else
+// (non-200, or the request erroring/timing out) means SetAlive(false).
+// Doing each backend's check in its own goroutine (with a
+// sync.WaitGroup per tick) keeps one slow/dead backend from delaying
+// the check on the others. Select on ctx.Done() to exit the loop.
 func (c *Checker) Run(ctx context.Context) {
 }

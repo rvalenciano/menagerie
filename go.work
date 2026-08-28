@@ -5,4 +5,8 @@ use (
 	./circuit-breaker
 	./consistent-hash-ring
 	./exhibits
+	./rate-limiter
+	./ttl-cache
+	./job-queue
+	./wal
 )

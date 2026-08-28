@@ -28,6 +28,14 @@ func NewHandler(pool *balancer.Pool) *Handler {
 // TODO(TDD): implement test-first against internal/proxy/proxy_test.go
 // (seam 2 in README.md §3). This is the shell's second red test, after
 // balancer.Pool.Next is implemented.
+//
+// Expected shape: call h.Pool.Next() — on ErrNoHealthyBackends, write a
+// 502/503 and return. Otherwise build an httputil.ReverseProxy for the
+// chosen backend's URL (httputil.NewSingleHostReverseProxy is the
+// standard-library tool for this) and call its ServeHTTP. Set the
+// proxy's ErrorHandler to mark the backend dead (backend.SetAlive(false)
+// — this is the "passive" health check) and write an error response,
+// rather than letting a broken backend hang the client.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not implemented", http.StatusNotImplemented)
 }

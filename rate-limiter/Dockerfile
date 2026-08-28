@@ -1,12 +1,12 @@
-FROM rust:1-slim AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
-COPY Cargo.toml ./
-COPY src ./src
-RUN cargo build --release
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 go build -o /out/rate-limiter ./cmd/server
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=build /src/target/release/rate-limiter /usr/local/bin/rate-limiter
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates wget
+COPY --from=build /out/rate-limiter /usr/local/bin/rate-limiter
 EXPOSE 3000
 ENTRYPOINT ["rate-limiter"]

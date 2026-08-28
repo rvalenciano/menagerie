@@ -1,27 +1,28 @@
 # rate-limiter
 
-A token-bucket rate limiter, built test-first in Rust, plus a small Axum
-HTTP demo server that applies it as middleware. Part of a personal
-portfolio ecosystem of small, focused apps in different languages
-(sibling project: [go-load-balancer](../go-load-balancer), in Go).
+A token-bucket rate limiter, built test-first in Go, plus a small
+stdlib `net/http` demo server that applies it as middleware. Part of a
+personal portfolio ecosystem of small, focused apps — now an all-Go
+fleet (sibling projects: [go-load-balancer](../go-load-balancer),
+[circuit-breaker](../circuit-breaker)).
 
 ## 1. Problem Statement
 
 ### 1.1 Goal
 
-Implement a token-bucket rate limiter as a reusable Rust module, plus a
-small Axum-based HTTP demo server that applies it as middleware, such
-that:
+Implement a token-bucket rate limiter as a reusable Go package, plus a
+small `net/http`-based HTTP demo server that applies it as middleware,
+such that:
 
 1. Each caller draws from a bucket of up to `capacity` tokens.
-2. Tokens replenish continuously over time at a configured `refill_rate`
+2. Tokens replenish continuously over time at a configured `refillRate`
    (tokens/second), rather than resetting in discrete steps.
 3. A request that finds the bucket empty is rejected with HTTP `429 Too
    Many Requests`; a request that finds a token available is let through
    and consumes one token.
 4. The bucket stays correct under concurrent access — many requests (or
-   threads) acquiring at once must never let more than `capacity` tokens
-   be handed out in a burst.
+   goroutines) acquiring at once must never let more than `capacity`
+   tokens be handed out in a burst.
 5. Can be benchmarked under heavy, sustained request pressure to show
    the success rate actually collapsing to the configured cap once the
    bucket is saturated, not just "it works."
@@ -46,14 +47,14 @@ independently testable behaviors — that's what makes it a good exercise:
 
 - A **pure, stateful algorithm** (refill-over-time math plus the
   acquire/deny decision) that has no I/O at all once time is injected
-  via a clock abstraction, so it can be tested with plain Rust structs
+  via a clock abstraction, so it can be tested with plain Go structs
   and no server, and without sleeping in the test suite.
-- An **HTTP boundary** (the Axum middleware) that can be fully exercised
-  in-process using Tower's test utilities (`ServiceExt::oneshot` against
-  the router) — no real network socket required to test correctness.
-- A genuine **concurrency-correctness question**: many threads calling
-  `try_acquire` at once must never collectively pull more tokens than
-  the bucket ever held.
+- An **HTTP boundary** (the middleware) that can be fully exercised
+  in-process using `net/http/httptest` against the handler — no real
+  network socket required to test correctness.
+- A genuine **concurrency-correctness question**: many goroutines
+  calling `TryAcquire` at once must never collectively pull more tokens
+  than the bucket ever held.
 - A genuine **performance question** ("does it actually reject once
   saturated, under real concurrent HTTP traffic?") that unit tests
   cannot answer and that needs real, networked load generation to answer
@@ -63,92 +64,90 @@ independently testable behaviors — that's what makes it a good exercise:
 
 | Concern | How it's exercised | Tooling |
 |---|---|---|
-| Refill/acquire math over time | Unit tests inject a fake clock and advance it manually — no real sleeps | plain `#[test]`, injected `Clock` |
-| HTTP 429 behavior at the middleware boundary | In-process requests against the real Axum router, no socket | `tower::ServiceExt::oneshot`, injected clock |
-| Correctness under concurrent acquires | N threads hammering one shared bucket; total successful acquires asserted `<= capacity` | `std::thread`, `Arc` |
+| Refill/acquire math over time | Unit tests inject a fake clock and advance it manually — no real sleeps | plain `testing`, injected `Clock` |
+| HTTP 429 behavior at the middleware boundary | In-process requests against the real handler, no socket | `net/http/httptest`, injected clock |
+| Correctness under concurrent acquires | N goroutines hammering one shared bucket; total successful acquires asserted `<= capacity` | `sync.WaitGroup`, shared `*TokenBucket` |
 | Behavior under real, sustained HTTP pressure | Real load fired at the real, containerized demo server | [vegeta](https://github.com/tsenart/vegeta) (pure Go load-testing tool) via `benchmark/` |
 
 ## 2. Architecture
 
 ```
                     ┌───────────────────────────────┐
-   client  ───────► │   Axum demo server (main.rs)   │
+   client  ───────► │  net/http demo server (main.go)│
    requests         │                                │
                     │  ┌──────────────┐  ┌─────────┐ │
-                    │  │ rate_limit   │─►│ handler │ │
+                    │  │ rateLimit    │─►│ handler │ │
                     │  │ middleware   │  │  "ok"   │ │
                     │  └──────┬───────┘  └─────────┘ │
                     └─────────┼──────────────────────┘
-                               │ try_acquire()
+                               │ TryAcquire()
                                ▼
                       ┌──────────────────┐
                       │   TokenBucket     │
                       │  capacity         │
                       │  tokens           │
-                      │  refill_rate      │
-                      │  last_refill      │◄── Clock (injected)
+                      │  refillRate       │
+                      │  lastRefill       │◄── Clock (injected)
                       └──────────────────┘
 
-  try_acquire() == true  → pass request through, 200
-  try_acquire() == false → short-circuit, 429
+  TryAcquire() == true  → pass request through, 200
+  TryAcquire() == false → short-circuit, 429
 ```
 
-- **`src/token_bucket.rs`** — `TokenBucket`: capacity, current tokens,
-  refill rate, last-refill timestamp, and a pluggable `Clock` trait
-  (instead of calling `Instant::now()` directly) so tests can control
-  the passage of time without sleeping. This is the seam every other
-  layer sits on top of; it has no knowledge of HTTP.
-- **`src/main.rs`** — wires an Axum `Router` with a middleware layer
-  (`axum::middleware::from_fn_with_state`) that calls `try_acquire()` on
-  a shared `Arc<TokenBucket>` for every incoming request, returning
-  `429` on rejection and passing through to the handler otherwise.
-- **`src/lib.rs`** — exposes `token_bucket` as a library target
-  (`rate_limiter`) separate from the `main.rs` binary, so the bucket can
-  be unit-tested on its own without pulling in Axum/Tokio.
+- **`internal/ratelimit/token_bucket.go`** — `TokenBucket`: capacity,
+  current tokens, refill rate, last-refill timestamp, and a pluggable
+  `Clock` type (instead of calling `time.Now()` directly) so tests can
+  control the passage of time without sleeping. This is the seam every
+  other layer sits on top of; it has no knowledge of HTTP.
+- **`cmd/server/main.go`** — wires a stdlib `net/http` handler with a
+  middleware (`rateLimit`) that calls `TryAcquire()` on a shared
+  `*ratelimit.TokenBucket` for every incoming request, returning `429`
+  on rejection and passing through to the handler otherwise.
 
 ## 3. TDD plan — proposed seams (to confirm before writing the first test)
 
-1. **`TokenBucket::try_acquire(&self) -> bool`** (pure, no I/O)
+1. **`TokenBucket.TryAcquire() bool`** (pure, no I/O)
    Refill-over-time math and the acquire/deny decision. Time comes from
-   an injected `Clock` trait rather than `Instant::now()` directly, so
-   tests advance a fake clock instead of sleeping. Candidate cases: a
-   full bucket allows `capacity` acquires then denies; waiting for
-   `1/refill_rate` seconds (on the fake clock) frees up exactly one more
+   an injected `Clock` rather than `time.Now()` directly, so tests
+   advance a fake clock instead of sleeping. Candidate cases: a full
+   bucket allows `capacity` acquires then denies; waiting for
+   `1/refillRate` seconds (on the fake clock) frees up exactly one more
    token; the bucket never holds more than `capacity` tokens no matter
    how long it sits idle.
 
 2. **HTTP middleware seam**
-   Wraps requests, returns `429` when `try_acquire` fails and passes
-   through otherwise. Exercised in-process using Axum's test utilities
-   (`tower::ServiceExt::oneshot` against the router, no real network
-   socket needed) with a fake/injected clock, so the whole request/deny
-   cycle is deterministic and fast.
+   Wraps requests, returns `429` when `TryAcquire` fails and passes
+   through otherwise. Exercised in-process using Go's test utilities
+   (`net/http/httptest` against the handler, no real network socket
+   needed) with a fake/injected clock, so the whole request/deny cycle
+   is deterministic and fast.
 
 3. **Concurrency seam**
-   Bucket correctness under many concurrent `try_acquire` calls from
-   multiple threads (the bucket's internal state is behind a `Mutex`, or
-   built from atomics, so `try_acquire` can take `&self` and be called
-   from an `Arc<TokenBucket>` shared across threads) — asserted by a
-   burst test that spawns N threads all calling `try_acquire` on one
-   shared bucket at once, and checks the total number of successful
-   acquires never exceeds `capacity`.
+   Bucket correctness under many concurrent `TryAcquire` calls from
+   multiple goroutines (the bucket's internal state is behind a
+   `sync.Mutex`, so `TryAcquire` can be called safely from a single
+   shared `*TokenBucket`) — asserted by a burst test that spawns N
+   goroutines all calling `TryAcquire` on one shared bucket at once, and
+   checks the total number of successful acquires never exceeds
+   `capacity`.
 
-Implementation status right now: **shell only**. `TokenBucket::new` is
-implemented (it's just field initialization), but `try_acquire` is
-`todo!()` — the first real test against seam 1 should start red.
+Implementation status right now: **shell only**. `NewTokenBucket` /
+`NewTokenBucketWithClock` are implemented (they're just field
+initialization), but `TryAcquire` is a stub that always returns `false`
+— the first real test against seam 1 should start red.
 
 ## 4. How to run it
 
-There's no local Rust toolchain assumed; everything below runs through
-Docker. (If you do have `cargo` installed locally, `cargo test`,
-`cargo build`, and `cargo run` all work directly too.)
+There's no local Go toolchain assumed; everything below runs through
+Docker. (If you do have `go` installed locally, `go test ./...`,
+`go build ./...`, and `go run ./cmd/server` all work directly too.)
 
 ```bash
-# build the shell (todo!() bodies compile fine — they only panic if hit)
-docker run --rm -v "$PWD":/src -w /src rust:1-slim cargo build
+# build the shell (the stub compiles fine — it just always returns false)
+docker run --rm -v "$PWD":/src -w /src golang:1.26-alpine go build ./...
 
-# once try_acquire is implemented, unit tests run the same way:
-docker run --rm -v "$PWD":/src -w /src rust:1-slim cargo test
+# once TryAcquire is implemented, unit tests run the same way:
+docker run --rm -v "$PWD":/src -w /src golang:1.26-alpine go test ./...
 
 # build and run the demo server
 docker compose up --build
@@ -179,9 +178,9 @@ docker compose -f docker-compose.yml -f docker-compose.bench.yml down
 This produces a `vegeta report` with request rate achieved, success
 ratio, and latency percentiles (p50/p95/p99/max). The interesting number
 here isn't throughput — it's the **success ratio**: once the sustained
-attack rate exceeds `capacity + refill_rate` sustained tokens/second,
+attack rate exceeds `capacity + refillRate` sustained tokens/second,
 the success ratio should collapse from ~100% down to roughly
-`refill_rate / attack_rate`, which is the honest, load-tested proof that
+`refillRate / attackRate`, which is the honest, load-tested proof that
 the limiter is actually capping traffic at its configured rate rather
 than just "working" in a unit test.
 
@@ -193,6 +192,6 @@ than just "working" in a unit test.
 - A distributed/shared limiter (e.g. Redis-backed) for multi-instance
   deployments.
 - Configurable capacity/refill-rate via CLI flags or env vars (currently
-  hardcoded constants in `main.rs`).
+  hardcoded constants in `cmd/server/main.go`).
 - Structured metrics (current/available tokens, rejection rate) beyond
   what a single `vegeta` run reports.

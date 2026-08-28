@@ -3,6 +3,7 @@ networks:
 
 volumes:
   pgdata:
+  waldata:
 
 services:
   # ---------------------------------------------------------------
@@ -88,9 +89,9 @@ services:
   # circuit-breaker — one breaker per shared upstream, plus a Postgres
   # audit log of every state transition (breaker_transitions table).
   # One-shot: makes its configured number of calls, then exits. Run
-  # with `docker compose run --build circuit-breaker-demo`.
+  # with `docker compose run --build circuit-breaker`.
   # ---------------------------------------------------------------
-  circuit-breaker-demo:
+  circuit-breaker:
     build:
       context: ./circuit-breaker
       dockerfile: Dockerfile.demo
@@ -113,9 +114,9 @@ services:
   # consistent-hash-ring — node membership persisted to Postgres
   # (ring_nodes table); the ring's hash math stays in-memory, rebuilt
   # from the persisted active nodes on startup. One-shot CLI demo. Run
-  # with `docker compose run --build consistent-hash-ring-demo`.
+  # with `docker compose run --build consistent-hash-ring`.
   # ---------------------------------------------------------------
-  consistent-hash-ring-demo:
+  consistent-hash-ring:
     build:
       context: ./consistent-hash-ring
     environment:
@@ -129,9 +130,9 @@ services:
   # ---------------------------------------------------------------
   # job-queue — jobs persisted to Postgres (jobs table); dequeue uses
   # `SELECT ... FOR UPDATE SKIP LOCKED` for safe multi-worker pickup.
-  # One-shot demo. Run with `docker compose run --build job-queue-demo`.
+  # One-shot demo. Run with `docker compose run --build job-queue`.
   # ---------------------------------------------------------------
-  job-queue-demo:
+  job-queue:
     build:
       context: ./job-queue
     environment:
@@ -160,5 +161,22 @@ services:
       context: ./ttl-cache
     ports:
       - "6380:6380"
+    networks:
+      - labnet
+
+  # ---------------------------------------------------------------
+  # wal — no external dependencies; state lives in the `waldata`
+  # volume so it survives container restarts, which is the whole
+  # point (see wal/README.md § "The actual point: crash it on
+  # purpose" for the real kill -9 chaos test). Default command just
+  # dumps current state; override args via `docker compose run`:
+  #   docker compose run --build wal -log /data/demo.wal put foo bar
+  # ---------------------------------------------------------------
+  wal:
+    build:
+      context: ./wal
+    volumes:
+      - waldata:/data
+    command: ["-log", "/data/demo.wal", "dump"]
     networks:
       - labnet

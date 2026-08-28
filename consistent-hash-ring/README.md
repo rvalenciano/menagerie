@@ -176,5 +176,5 @@ docker run --rm -e DATABASE_URL="postgres://systems_lab:systems_lab@host.docker.
   consistent-hash-ring -nodes=node-1,node-2,node-3
 
 # or via docker-compose from the repo root (wires DATABASE_URL for you)
-docker compose run --build consistent-hash-ring-demo
+docker compose run --build consistent-hash-ring
 ```
